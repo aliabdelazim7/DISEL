@@ -1,0 +1,10 @@
+{
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "crons": [
+    { "path": "/api/scheduled-reports", "schedule": "55 20 * * *" },
+    { "path": "/api/expire-held-invoices", "schedule": "0 1 * * *" },
+    { "path": "/api/installment-reminders", "schedule": "0 6 * * *" }
+  ]
+}
