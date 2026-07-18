@@ -1,9 +1,20 @@
 -- ============================================================================
 -- DIESEL Barbershop — إعداد قاعدة البيانات كاملة من الصفر (ملف واحد)
 -- شغّله مرة واحدة بالكامل في: Supabase → SQL Editor → New query → Run
--- ينشئ كل الجداول والدوال والأعمدة التي يحتاجها التطبيق، بصلاحيات RLS
--- مفتوحة (allow all) حتى يعمل التطبيق فورًا بمفتاح anon.
--- (لتشديد الأمان لاحقًا: شغّل db/secure_rls_migration.sql — راجع SECURITY_SETUP.md)
+--
+-- ⚠️  الـ SQL لوحده مش كفاية — التطبيق بيسجّل دخول بـ Supabase Auth
+--     (signInWithPassword)، فلازم تعمل مستخدم Auth بعد كده وإلا مش هتقدر تدخل:
+--         node scripts/provision_auth_users.cjs
+--     الترتيب الكامل في SECURITY_SETUP.md.
+--
+--  الجداول القديمة بتتعمل بصلاحيات RLS مفتوحة (allow all) عشان التطبيق يشتغل
+--  فورًا، والجداول الأحدث (held_invoices / installments / quotations /
+--  attendance) بتقفل نفسها على authenticated من أول لحظة — ودي شغالة عادي لأن
+--  التطبيق بيدخل كـ authenticated.
+--  لتشديد الباقي: شغّل db/secure_rls_migration.sql بعد ما تتأكد إن الدخول شغال.
+--
+-- ⚠️  مولّد آليًا — لا تعدّله بالإيد.
+--     أضف ميجريشن في db/ ثم شغّل: node scripts/build_setup_sql.cjs
 -- ============================================================================
 
 
@@ -368,6 +379,75 @@ on conflict do nothing;
 -- ============================================================
 -- تم. كل الجداول جاهزة + 8 تصنيفات ملابس، بدون أي منتجات.
 -- ============================================================
+
+
+-- ========================= 00_fresh_setup_extras.sql =========================
+-- =============================================================================
+-- ADRIA — schema extras for a FRESH database.
+-- Run this AFTER setup_new_database.sql. It adds every column/table the app
+-- needs that the base file may be missing. Idempotent — safe to run again.
+-- =============================================================================
+
+-- Customers ------------------------------------------------------------------
+alter table customers add column if not exists card_number text;
+
+-- Products: units + fractional (weight) quantities -------------------------
+alter table products add column if not exists unit text not null default 'قطعة';
+alter table products alter column stock_quantity type numeric using stock_quantity::numeric;
+alter table purchase_items alter column quantity type numeric using quantity::numeric;
+alter table order_items alter column quantity type numeric using quantity::numeric;
+alter table order_items alter column returned_quantity type numeric using returned_quantity::numeric;
+
+-- Order items: refunded cash per item --------------------------------------
+alter table order_items add column if not exists refunded_amount numeric default 0;
+update order_items set refunded_amount = 0 where refunded_amount is null;
+
+-- Orders: payment method, soft-delete, car link, refund method -------------
+alter table orders add column if not exists payment_method text default 'cash';
+alter table orders add column if not exists refund_method text;
+alter table orders add column if not exists car_id uuid references car_subscriptions(id) on delete set null;
+alter table orders add column if not exists is_deleted boolean not null default false;
+alter table orders add column if not exists deleted_at timestamptz;
+alter table orders add column if not exists deletion_reason text;
+create index if not exists idx_orders_is_deleted on orders(is_deleted);
+create index if not exists idx_orders_deleted_at on orders(deleted_at);
+
+-- Store settings: opening balance ------------------------------------------
+alter table store_settings add column if not exists initial_balance numeric default 0;
+alter table store_settings add column if not exists allow_cashier_employee_advance boolean default false;
+
+-- Purchase invoices: payment method ----------------------------------------
+alter table purchase_invoices add column if not exists payment_method text default 'cash';
+
+-- Expenses: payment split + car link ---------------------------------------
+alter table expenses add column if not exists paid_cash      numeric default 0;
+alter table expenses add column if not exists paid_visa      numeric default 0;
+alter table expenses add column if not exists paid_wallet    numeric default 0;
+alter table expenses add column if not exists paid_instapay  numeric default 0;
+alter table expenses add column if not exists payment_method text default 'cash';
+alter table expenses add column if not exists car_id uuid references car_subscriptions(id) on delete set null;
+
+-- Car subscriptions: status + subscription terms ---------------------------
+alter table car_subscriptions add column if not exists status text default 'active';
+alter table car_subscriptions add column if not exists subscription_duration_months integer;
+alter table car_subscriptions add column if not exists subscription_frequency_days integer;
+
+-- Employees: phone, status, leave balance, hire date -----------------------
+alter table employees add column if not exists phone text;
+alter table employees add column if not exists is_active boolean not null default true;
+alter table employees add column if not exists annual_leave_balance numeric not null default 0;
+alter table employees add column if not exists hire_date date default current_date;
+create index if not exists idx_employees_is_active on employees(is_active);
+
+-- Employee transactions: deductions + incentive type -----------------------
+alter table employee_transactions add column if not exists deductions numeric default 0;
+alter table employee_transactions drop constraint if exists employee_transactions_type_check;
+alter table employee_transactions
+  add constraint employee_transactions_type_check
+  check (type in ('salary', 'advance', 'incentive'));
+
+-- Cashiers: login email (for Supabase Auth) --------------------------------
+alter table cashiers add column if not exists email text;
 
 
 -- ========================= 02_login_rpc.sql =========================
@@ -988,3 +1068,368 @@ create policy "authenticated full access" on public.held_invoices
   for all to authenticated using (true) with check (true);
 revoke all on public.held_invoices from anon;
 grant all on public.held_invoices to authenticated;
+
+
+-- ========================= 26_product_image.sql =========================
+-- صورة المنتج: تُخزَّن كـ Data URL مضغوط (ثمبنيل) وتظهر في الكاشير.
+-- شغّله مرة واحدة في Supabase → SQL Editor قبل استخدام رفع الصور.
+alter table products add column if not exists image_url text;
+
+
+-- ========================= 27_installments.sql =========================
+-- ═══════════════════════════════════════════════════════════════════════════
+-- التقسيط: خطة تقسيط لكل فاتورة آجل + جدول دفعات (أقساط) بتواريخ استحقاق.
+-- التحصيل بيمرّ على منطق «سداد أجل» الموجود (payInvoiceDebt) فيتحسب في المالية
+-- والإحصائيات تلقائياً. الفايدة بتتضاف لإجمالي الفاتورة (إيراد).
+-- شغّله مرة واحدة في Supabase → SQL Editor.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+create table if not exists installment_plans (
+  id uuid primary key default gen_random_uuid(),
+  order_id text references orders(id) on delete cascade,
+  customer_id uuid references customers(id) on delete set null,
+  goods_total numeric not null default 0,      -- إجمالي البضاعة قبل الفايدة
+  down_payment numeric not null default 0,      -- المقدم
+  financed_amount numeric not null default 0,   -- الممول = goods_total − down_payment
+  interest_type text not null default 'none',   -- 'none' | 'percent' | 'fixed'
+  interest_value numeric not null default 0,    -- النسبة % أو المبلغ المُدخَل
+  interest_amount numeric not null default 0,   -- الفايدة المحسوبة فعلياً
+  total_due numeric not null default 0,         -- financed_amount + interest_amount = مجموع الأقساط
+  installments_count int not null default 1,
+  interval_type text not null default 'monthly',-- 'monthly' | 'quarterly' | 'custom'
+  interval_days int,                            -- عدد الأيام لو interval_type='custom'
+  status text not null default 'active',        -- 'active' | 'completed'
+  note text,
+  created_at timestamptz default now()
+);
+
+create table if not exists installments (
+  id uuid primary key default gen_random_uuid(),
+  plan_id uuid references installment_plans(id) on delete cascade,
+  order_id text,
+  customer_id uuid,
+  seq int not null,                             -- رقم القسط (1..N)
+  due_date date not null,                       -- تاريخ الاستحقاق
+  amount numeric not null default 0,
+  paid boolean not null default false,
+  paid_amount numeric not null default 0,
+  paid_at timestamptz,
+  payment_order_id text,                        -- أوردر السداد اللي اتعمل عند التحصيل
+  notified boolean not null default false,      -- اتبعت رسالة التذكير قبل يومين
+  created_at timestamptz default now()
+);
+
+create index if not exists idx_installments_plan on installments(plan_id);
+create index if not exists idx_installments_due on installments(due_date) where paid = false;
+create index if not exists idx_installment_plans_customer on installment_plans(customer_id);
+
+-- RLS + الصلاحيات (زي باقي جداول النظام: أي مستخدم مصادق له كل الصلاحيات).
+do $$
+declare t text;
+begin
+  foreach t in array array['installment_plans','installments'] loop
+    execute format('alter table public.%I enable row level security;', t);
+    execute format('grant all on public.%I to authenticated;', t);
+    if not exists (select 1 from pg_policies where schemaname='public' and tablename=t and policyname='authenticated full access') then
+      execute format('create policy "authenticated full access" on public.%I for all to authenticated using (true) with check (true);', t);
+    end if;
+  end loop;
+end $$;
+
+
+-- ========================= 28_quotations.sql =========================
+-- عروض الأسعار (Quotations): تُنشأ من السلة بدون خصم مخزون ولا بيع.
+-- تُحفظ وتُطبع كخطاب A4 بلوجو وبيانات الشركة وQR بتفاصيل العرض.
+-- شغّله مرة واحدة في Supabase → SQL Editor.
+create table if not exists quotations (
+  id uuid primary key default gen_random_uuid(),
+  quotation_number text,
+  recipient_company text,
+  recipient_phone text,
+  intro_text text,          -- مقدمة الخطاب
+  notes text,               -- ملاحظات
+  execution_period text,    -- مدة التنفيذ
+  items jsonb not null default '[]'::jsonb,  -- [{name, quantity, unit_price, total}]
+  subtotal numeric not null default 0,
+  discount numeric not null default 0,
+  total numeric not null default 0,
+  cashier_name text,
+  created_at timestamptz default now()
+);
+
+create index if not exists idx_quotations_created on quotations(created_at desc);
+
+do $$ begin
+  execute 'alter table public.quotations enable row level security';
+  execute 'grant all on public.quotations to authenticated';
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='quotations' and policyname='authenticated full access') then
+    execute 'create policy "authenticated full access" on public.quotations for all to authenticated using (true) with check (true)';
+  end if;
+end $$;
+
+
+-- ========================= 29_quotations_storage.sql =========================
+-- تخزين ملفات عروض الأسعار PDF لإرسالها كرابط تحميل في الواتساب.
+-- ينشئ bucket عام اسمه «quotations» + صلاحيات رفع/قراءة تعمل بمفتاح anon.
+-- شغّله مرة واحدة في Supabase → SQL Editor.
+
+-- 1) الـ bucket العام (القراءة عبر الرابط العام بدون تسجيل دخول).
+insert into storage.buckets (id, name, public)
+values ('quotations', 'quotations', true)
+on conflict (id) do update set public = true;
+
+-- 2) صلاحيات storage.objects على هذا الـ bucket فقط (public = anon + authenticated).
+do $$ begin
+  -- رفع ملف جديد
+  if not exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname='quotations_insert') then
+    execute 'create policy "quotations_insert" on storage.objects for insert to public with check (bucket_id = ''quotations'')';
+  end if;
+  -- استبدال ملف موجود (upsert)
+  if not exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname='quotations_update') then
+    execute 'create policy "quotations_update" on storage.objects for update to public using (bucket_id = ''quotations'') with check (bucket_id = ''quotations'')';
+  end if;
+  -- قراءة (الـ bucket عام أصلاً، لكن نضيف السياسة احتياطاً)
+  if not exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname='quotations_read') then
+    execute 'create policy "quotations_read" on storage.objects for select to public using (bucket_id = ''quotations'')';
+  end if;
+end $$;
+
+
+-- ========================= 30_attendance.sql =========================
+-- =============================================================================
+-- ATTENDANCE (تسجيل حضور وانصراف الموظفين)  — run AFTER secure_rls_migration.sql
+-- =============================================================================
+--  الفكرة:
+--   * صفحة عامة منفصلة /attendance يستخدمها كل الموظفين (بدون تسجيل دخول للنظام).
+--   * كل موظف يختار اسمه + يكتب رقمه السري (attendance_pin) ويسجّل حضور/انصراف.
+--   * كل الكتابة تتم عبر دوال SECURITY DEFINER فقط (anon ماينفعش يكتب مباشرة).
+--   * المدير (authenticated) يقرأ سجل الحضور من لوحة التحكم.
+--
+--  آمن للتشغيل أكثر من مرة (idempotent).
+-- =============================================================================
+
+-- 1) رقم سري لكل موظف لتسجيل الحضور
+alter table employees add column if not exists attendance_pin text;
+
+-- 2) جدول الحضور: صف واحد لكل موظف في اليوم (حضور + انصراف)
+create table if not exists attendance (
+  id uuid default gen_random_uuid() primary key,
+  employee_id uuid references employees(id) on delete cascade,
+  work_date date not null,
+  check_in timestamptz,
+  check_out timestamptz,
+  created_at timestamptz default now(),
+  unique (employee_id, work_date)
+);
+
+create index if not exists idx_attendance_employee on attendance(employee_id);
+create index if not exists idx_attendance_work_date on attendance(work_date);
+
+-- RLS: قراءة/إدارة للمصادَق عليهم فقط (المدير). الكتابة العامة عبر الدوال أدناه.
+alter table attendance enable row level security;
+drop policy if exists "authenticated full access" on attendance;
+create policy "authenticated full access" on attendance
+  for all to authenticated using (true) with check (true);
+revoke all on attendance from anon;
+
+-- ---------------------------------------------------------------------------
+-- 3) قائمة الموظفين النشطين لصفحة الحضور (بدون كشف الرقم السري)
+-- ---------------------------------------------------------------------------
+create or replace function public.get_attendance_employees()
+returns jsonb
+language sql
+security definer
+set search_path = public
+as $$
+  select coalesce(
+    jsonb_agg(
+      jsonb_build_object('id', e.id, 'name', e.name, 'job_title', e.job_title)
+      order by e.name
+    ),
+    '[]'::jsonb)
+  from employees e
+  where coalesce(e.is_active, true) = true;
+$$;
+
+revoke all on function public.get_attendance_employees() from public;
+grant execute on function public.get_attendance_employees() to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 4) حالة اليوم لموظف معيّن (لتفعيل/تعطيل زر الانصراف)
+-- ---------------------------------------------------------------------------
+create or replace function public.get_attendance_status(p_employee_id uuid)
+returns jsonb
+language sql
+security definer
+set search_path = public
+as $$
+  select coalesce(
+    (select jsonb_build_object('check_in', a.check_in, 'check_out', a.check_out)
+       from attendance a
+      where a.employee_id = p_employee_id
+        and a.work_date = (now() at time zone 'Africa/Cairo')::date),
+    jsonb_build_object('check_in', null, 'check_out', null)
+  );
+$$;
+
+revoke all on function public.get_attendance_status(uuid) from public;
+grant execute on function public.get_attendance_status(uuid) to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 5) تسجيل حضور/انصراف — يتحقق من الرقم السري ويكتب الصف
+--    p_action: 'check_in' | 'check_out'
+-- ---------------------------------------------------------------------------
+create or replace function public.record_attendance(
+  p_employee_id uuid,
+  p_pin text,
+  p_action text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_emp    employees%rowtype;
+  v_today  date := (now() at time zone 'Africa/Cairo')::date;
+  v_now    timestamptz := now();
+  v_row    attendance%rowtype;
+begin
+  select * into v_emp from employees where id = p_employee_id;
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'not_found');
+  end if;
+  if coalesce(v_emp.is_active, true) = false then
+    return jsonb_build_object('ok', false, 'error', 'inactive');
+  end if;
+  if coalesce(v_emp.attendance_pin, '') = '' then
+    return jsonb_build_object('ok', false, 'error', 'no_pin');
+  end if;
+  if v_emp.attendance_pin <> p_pin then
+    return jsonb_build_object('ok', false, 'error', 'wrong_pin');
+  end if;
+
+  select * into v_row from attendance
+   where employee_id = p_employee_id and work_date = v_today;
+
+  if p_action = 'check_in' then
+    if found and v_row.check_in is not null then
+      return jsonb_build_object('ok', false, 'error', 'already_checked_in',
+        'name', v_emp.name, 'time', v_row.check_in);
+    end if;
+    if found then
+      update attendance set check_in = v_now where id = v_row.id;
+    else
+      insert into attendance(employee_id, work_date, check_in)
+        values (p_employee_id, v_today, v_now);
+    end if;
+    return jsonb_build_object('ok', true, 'action', 'check_in',
+      'name', v_emp.name, 'time', v_now);
+
+  elsif p_action = 'check_out' then
+    if not found or v_row.check_in is null then
+      return jsonb_build_object('ok', false, 'error', 'not_checked_in', 'name', v_emp.name);
+    end if;
+    if v_row.check_out is not null then
+      return jsonb_build_object('ok', false, 'error', 'already_checked_out',
+        'name', v_emp.name, 'time', v_row.check_out);
+    end if;
+    update attendance set check_out = v_now where id = v_row.id;
+    return jsonb_build_object('ok', true, 'action', 'check_out',
+      'name', v_emp.name, 'time', v_now);
+
+  else
+    return jsonb_build_object('ok', false, 'error', 'bad_action');
+  end if;
+end;
+$$;
+
+revoke all on function public.record_attendance(uuid, text, text) from public;
+grant execute on function public.record_attendance(uuid, text, text) to anon, authenticated;
+
+
+-- ========================= 31_item_salesperson_commissions.sql =========================
+-- ============================================================================
+-- 31 — الموظف المسؤول لكل صنف + عمولات المبيعات
+-- ============================================================================
+-- قبل كده الكابتن كان بيتحدد للفاتورة كلها (orders.salespeople) والعمولة
+-- بتتقسّم بالتساوي على كل الكباتن. دلوقتي كل صنف في الفاتورة ليه موظف مسؤول
+-- لوحده، فالمبيعات والعمولة بتتنسب للي عمل الشغل فعلاً.
+--
+-- نوعان من العمولة:
+--   • الخدمات  → نسبة % تلقائية من قيمة الخدمة (إعداد عام، افتراضي 10%)
+--   • المنتجات → قيمة يدوية بالجنيه لكل قطعة، الأدمن بيكتبها ويأكّدها من
+--                صفحة "مبيعات اليوم" (/admin/daily-sales)
+-- ============================================================================
+
+-- ── 1) الموظف المسؤول عن كل صنف ──────────────────────────────────────────────
+-- on delete set null: لو الموظف اتمسح تفضل الفاتورة سليمة، والاسم محفوظ
+-- في salesperson_name عشان التاريخ ما يضيعش.
+alter table order_items add column if not exists salesperson_id uuid references employees(id) on delete set null;
+alter table order_items add column if not exists salesperson_name text;
+
+-- ── 2) عمولة المنتج اليدوية ─────────────────────────────────────────────────
+-- commission_amount = القيمة لكل قطعة. الإجمالي = commission_amount × الكمية.
+-- commission_confirmed = الأدمن ضغط "تأكيد"، وقبل كده ما بتتحسبش للموظف.
+alter table order_items add column if not exists commission_amount numeric not null default 0;
+alter table order_items add column if not exists commission_confirmed boolean not null default false;
+alter table order_items add column if not exists commission_updated_at timestamptz;
+
+-- نوع الصنف وقت البيع (منتج/خدمة) — متجمّد على السطر.
+-- لو قريناه من products وقت العرض، مسح منتج أو تغيير نوعه بيعيد تصنيف كل
+-- الفواتير القديمة بأثر رجعي وعمولة خدمات مؤكَّدة تنزل صفر من غير ما حد ياخد باله.
+alter table order_items add column if not exists item_type text;
+
+-- ── 3) أعمدة كانت في ملفات root منفصلة ──────────────────────────────────────
+-- products.type كان في add_service_type_and_seed.sql و orders.salespeople كان في
+-- add_multiple_salespeople.sql — الاتنين مش في db/ فمكانوش بيتولّدوا في
+-- SETUP_DIESEL.sql، يعني أي داتابيز جديدة كانت هتطلع من غيرهم والتطبيق يقع.
+-- بنضمنهم هنا (idempotent، مش هيأثر لو الأعمدة موجودة).
+alter table products add column if not exists type text not null default 'product';
+alter table orders add column if not exists salespeople jsonb not null default '[]'::jsonb;
+
+-- ── 4) نسبة عمولة الخدمات (إعداد عام) ───────────────────────────────────────
+alter table store_settings add column if not exists service_commission_rate numeric not null default 10;
+
+-- ── 5) فهارس ────────────────────────────────────────────────────────────────
+-- order_items كان بلا فهرس على order_id رغم إن كل قراءة بتعمل join عليه،
+-- و orders بلا فهرس على created_at رغم إن صفحة مبيعات اليوم بتفلتر بيه.
+create index if not exists idx_order_items_order_id on order_items(order_id);
+create index if not exists idx_order_items_salesperson_id on order_items(salesperson_id);
+create index if not exists idx_orders_created_at on orders(created_at);
+
+-- ── 6) ترحيل الفواتير القديمة ───────────────────────────────────────────────
+-- نوع الصنف بياتاخد من المنتج مرة واحدة، وبعدها بيفضل متجمّد على السطر.
+update order_items oi
+set item_type = coalesce(p.type, 'product')
+from products p
+where oi.product_id = p.id and oi.item_type is null;
+update order_items set item_type = 'product' where item_type is null; -- منتجات متمسوحة
+
+-- الأصناف القديمة ملهاش موظف. بنملاها من كابتن الفاتورة: لو كابتن واحد بس
+-- (أو عمود salesperson_id القديم) ننسب كل أصناف الفاتورة ليه. الفواتير اللي
+-- ليها أكتر من كابتن بنسيبها فاضية — مالناش طريقة نعرف مين عمل إيه، والأدمن
+-- يقدر يظبطها من صفحة مبيعات اليوم.
+--
+-- ملاحظة: salespeople عمود jsonb ملوش FK، فممكن يكون فيه id موظف اتمسح أو
+-- نص مش uuid. من غير الفلترة دي، صف واحد بايظ بيوقف الميجريشن كلها
+-- (خطأ FK أو 22P02 على الكاست).
+update order_items oi
+set salesperson_id = (o.salespeople -> 0 ->> 'id')::uuid,
+    salesperson_name = o.salespeople -> 0 ->> 'name'
+from orders o
+where oi.order_id = o.id
+  and oi.salesperson_id is null
+  and jsonb_array_length(coalesce(o.salespeople, '[]'::jsonb)) = 1
+  and (o.salespeople -> 0 ->> 'id') ~ '^[0-9a-fA-F-]{36}$'
+  and exists (select 1 from employees e where e.id = (o.salespeople -> 0 ->> 'id')::uuid);
+
+update order_items oi
+set salesperson_id = o.salesperson_id,
+    salesperson_name = o.salesperson_name
+from orders o
+where oi.order_id = o.id
+  and oi.salesperson_id is null
+  and o.salesperson_id is not null
+  and jsonb_array_length(coalesce(o.salespeople, '[]'::jsonb)) = 0
+  and exists (select 1 from employees e where e.id = o.salesperson_id);

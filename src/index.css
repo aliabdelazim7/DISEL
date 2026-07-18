@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+/* Keep using the existing v3-style config (content globs + darkMode: 'class'). */
+@config "../tailwind.config.js";
+
+/*
+ * Tailwind v4 compatibility shim: v4 changed the default border/divide color
+ * from gray-200 to `currentColor`. This restores the v3 default so existing
+ * `border` utilities (used without an explicit color throughout the app) keep
+ * rendering light gray instead of the current text color.
+ */
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentColor);
+  }
+}
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900 antialiased;
+    font-family: 'Tajawal', 'Cairo', sans-serif;
+  }
+}
+
+/* Custom Scrollbar for a premium look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
