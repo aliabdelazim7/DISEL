@@ -16,9 +16,17 @@ const OUT = path.join(__dirname, '..', 'SETUP_DIESEL.sql');
 
 // ملفات مش جزء من الإعداد:
 //   12_reset_data       → أداة مسح بيانات، لو اتحطت هنا هتفضّي الداتابيز
+//   32_reset_and_seed_barbershop → نفس الحكاية: بيعمل truncate لكل الجداول
+//                          وبيعيد زرع أصناف الباربر شوب. أداة تشغّلها بإيدك
+//                          لما تعوز تبدأ من الصفر، مش جزء من إعداد قاعدة جديدة.
 //   secure_rls_migration → تشديد أمان اختياري، بيتشغّل لوحده بعد ما التطبيق يشتغل
 //   seed_products_catalog → منتجات جاهزة، اختيارية حسب المحل
-const EXCLUDE = new Set(['12_reset_data.sql', 'secure_rls_migration.sql', 'seed_products_catalog.sql']);
+const EXCLUDE = new Set([
+  '12_reset_data.sql',
+  '32_reset_and_seed_barbershop.sql',
+  'secure_rls_migration.sql',
+  'seed_products_catalog.sql',
+]);
 
 const numOf = (f) => {
   const m = /^(\d+)_/.exec(f);
