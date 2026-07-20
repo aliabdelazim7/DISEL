@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore, cartLineId, type Product, DEFAULT_SERVICE_COMMISSION_RATE } from '../store/useStore';
+import { isServiceProduct } from '../utils/cart';
 import { EditInvoiceModal } from '../components/EditInvoiceModal';
 import { ShoppingCart, Search, Plus, Minus, Trash2, Banknote, RefreshCcw, Moon, Sun, ArrowRightLeft, X, Printer, CreditCard, Smartphone, Zap, ScanLine, Camera, Box, Check, ChevronRight, ChevronLeft, FileText, MessageSquare, Send, Wallet, Edit2, Eye, HandCoins, Clock, PauseCircle, Undo2, UserCheck } from 'lucide-react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
@@ -59,7 +60,9 @@ export default function POS() {
     } catch { alert('تعذّر تنفيذ التحويل'); }
     setSaveXferBusy(false);
   };
-  const [posType, setPosType] = useState<'all' | 'product' | 'service'>('all');
+  // الباربر شوب شغله الأساسي خدمات، فهي الافتراضي. مفيش خيار "الكل" —
+  // خلط الاتنين بيطوّل القايمة على الكاشير من غير فايدة.
+  const [posType, setPosType] = useState<'product' | 'service'>('service');
   const [historyToday, setHistoryToday] = useState(true);
   const [editingOrder, setEditingOrder] = useState<any>(null);
   const [viewExchange, setViewExchange] = useState<any>(null);
@@ -1428,8 +1431,8 @@ export default function POS() {
     (p) => {
       const normalizedName = normalizeArabic(p.name);
       const matchesSearch = searchTerms.length === 0 || searchTerms.every(term => normalizedName.includes(term)) || (p.barcode && p.barcode.includes(searchQuery));
-      const pType = (p as any).type === 'service' ? 'service' : 'product';
-      const matchesType = posType === 'all' || pType === posType;
+      const pType = isServiceProduct(p) ? 'service' : 'product';
+      const matchesType = pType === posType;
       return !p.is_hidden && (activeCategory === 'all' || p.category_id === activeCategory) && matchesSearch && matchesType;
     }
   );
@@ -2710,7 +2713,7 @@ export default function POS() {
           </div>
           <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar">
             <span className="text-[11px] font-bold text-slate-400 shrink-0">النوع</span>
-            {([['all', 'الكل'], ['product', 'منتجات'], ['service', 'خدمات']] as const).map(([k, label]) => (
+            {([['service', 'خدمات'], ['product', 'منتجات']] as const).map(([k, label]) => (
               <button key={k} onClick={() => setPosType(k)}
                 className={`shrink-0 px-4 py-2 rounded-xl text-xs font-black transition ${posType === k ? 'bg-amber-500 text-white shadow-md' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'}`}>
                 {label}

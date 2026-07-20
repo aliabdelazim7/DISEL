@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useStore } from '../../store/useStore';
 import { ClipboardCheck, Search, Save } from 'lucide-react';
+import { isServiceProduct } from '../../utils/cart';
 
 export default function StockTake() {
   const { products, storeSettings, adjustStock } = useStore();
@@ -12,7 +13,11 @@ export default function StockTake() {
 
   const list = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return products.filter((p) => !p.is_hidden).filter((p) => !q || p.name.toLowerCase().includes(q) || (p.barcode || '').includes(q));
+    // الخدمات مالهاش مخزون حقيقي (بتتخزن بمخزون وهمي كبير)، فجردها بلا معنى
+    // وكمان بتشوّش الفروقات وقيمة العجز/الزيادة.
+    return products
+      .filter((p) => !p.is_hidden && !isServiceProduct(p))
+      .filter((p) => !q || p.name.toLowerCase().includes(q) || (p.barcode || '').includes(q));
   }, [products, search]);
 
   const rows = list.map((p) => {

@@ -3,6 +3,7 @@ import { useStore } from '../../store/useStore';
 import type { PurchaseItem, Product } from '../../store/useStore';
 import { Users, Search, Plus, Edit2, Trash2, Phone, MapPin, Calendar, ShoppingCart, FileText, X, ChevronDown, Printer, Eye, Download } from 'lucide-react';
 import { normalizeArabic } from '../../utils/textUtils';
+import { isServiceProduct } from '../../utils/cart';
 import { fileToThumbnailDataUrl } from '../../utils/imageUpload';
 import { UNIT_OPTIONS, getUnitConfig, isFractionalUnit, formatQty } from '../../utils/units';
 import { escapeHtml } from '../../utils/escapeHtml';
@@ -38,7 +39,9 @@ function ProductSearchSelect({
   const normalizedSearch = normalizeArabic(search);
   const searchTerms = normalizedSearch.split(' ').filter(t => t.trim() !== '');
 
+  // الخدمات مش بتتشترى من مورد ومالهاش مخزون، فمش بتظهر في فواتير المشتريات.
   const filtered = products.filter(p => {
+    if (isServiceProduct(p)) return false;
     const normalizedName = normalizeArabic(p.name);
     return searchTerms.length === 0 || searchTerms.every(term => normalizedName.includes(term)) || (p.barcode && p.barcode.includes(search));
   }).sort((a, b) => {
@@ -275,6 +278,7 @@ export default function Suppliers() {
         purchase_price: 0,
         stock_quantity: 0,
         average_purchase_price: 0,
+        type: 'product', // الإضافة السريعة من فاتورة مشتريات = منتج دايماً
         unit: quickProductData.unit || 'قطعة',
         ...(quickProductData.image_url ? { image_url: quickProductData.image_url } : {})
       };
