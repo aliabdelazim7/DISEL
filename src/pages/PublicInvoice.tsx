@@ -57,6 +57,7 @@ export default function PublicInvoice() {
             regular_price: i.products?.sale_price,
             discount_price: i.products?.discount_price,
             returned_quantity: i.returned_quantity || 0,
+            salesperson_name: i.salesperson_name || null, // الفني اللي عمل الخدمة
           }));
 
           let debtBefore = 0;
@@ -448,7 +449,15 @@ export default function PublicInvoice() {
                 {order.items.map((item, idx) => (
                   <tr key={idx} className="group">
                     <td className="p-4 text-center text-slate-400 font-bold text-xs">{idx + 1}</td>
-                    <td className="p-4 font-black text-slate-800 text-sm">{item.name}</td>
+                    <td className="p-4 font-black text-slate-800 text-sm">
+                      {item.name}
+                      {/* الفني اللي عمل الخدمة — في نفس صف الخدمة */}
+                      {(item as any).salesperson_name && (
+                        <span className="block text-[11px] font-bold text-slate-400 mt-0.5">
+                          الفني: {(item as any).salesperson_name}
+                        </span>
+                      )}
+                    </td>
                     {!isPayment && <td className="p-4 text-center font-black text-slate-800">{item.quantity}</td>}
                     <td className="p-4 text-center font-bold text-slate-600 text-xs">
                       {(item as any).regular_price && ((item as any).discount_price || 0) > 0 && Math.abs(item.sale_price - ((item as any).discount_price || 0)) < 0.01 && (item as any).regular_price > item.sale_price ? (

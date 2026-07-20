@@ -427,7 +427,10 @@ export default function POS() {
   // Send a past invoice to the customer on WhatsApp (public link + summary).
   const sendOrderWhatsApp = (order: any) => {
     const invoiceLink = `${window.location.origin}/view-invoice/${order.id}`;
-    const itemsText = (order.items || []).map((i: any) => `• ${i.name} (${formatQty(i.quantity, i.unit)}) - ${(i.sale_price * i.quantity).toFixed(2)} ${storeSettings.currency}`).join('\n');
+    const itemsText = (order.items || []).map((i: any) => {
+      const tech = i.salesperson_name ? ` — الفني: ${i.salesperson_name}` : '';
+      return `• ${i.name} (${formatQty(i.quantity, i.unit)}) - ${(i.sale_price * i.quantity).toFixed(2)} ${storeSettings.currency}${tech}`;
+    }).join('\n');
     const spNames = (order.salespeople?.length ? order.salespeople.map((s: any) => s.name) : (order.salesperson_name ? [order.salesperson_name] : [])).join('، ');
     const spLine = spNames ? `*الكباتن المنفّذون:* ${spNames}\n` : '';
     const message = `*فاتورة من ${storeSettings.name}*\n\n*رقم الفاتورة:* #${order.id}\n${spLine}*الإجمالي:* ${(order.total || 0).toFixed(2)} ${storeSettings.currency}\n\n*عرض الفاتورة بالتفاصيل:*\n${invoiceLink}\n\n*تفاصيل الطلب:*\n${itemsText}\n\n*شكراً لتعاملكم معنا!*`;
@@ -1029,9 +1032,14 @@ export default function POS() {
       const priceCell = hasDisc
         ? `<span style="display:block;text-decoration:line-through;color:#000;font-size:10px;font-weight:600;">${prod!.sale_price.toFixed(2)}</span><span style="font-weight:900;">${item.sale_price.toFixed(2)}</span>`
         : item.sale_price.toFixed(2);
+      // اسم الفني تحت اسم الصنف في نفس الصف — الورق 72مم ضيّق، وعمود
+      // زيادة كان هيزنق باقي الأعمدة.
+      const techLine = item.salesperson_name
+        ? `<span style="display:block;font-size:9px;font-weight:600;margin-top:1px;">الفني: ${escapeHtml(item.salesperson_name)}</span>`
+        : '';
       return `<tr>
         <td style="text-align:center;">${index + 1}</td>
-        <td style="text-align:right;font-weight:bold;">${escapeHtml(item.name)}</td>
+        <td style="text-align:right;font-weight:bold;">${escapeHtml(item.name)}${techLine}</td>
         <td style="text-align:center;">${formatQty(item.quantity, item.unit)}</td>
         <td style="text-align:center;">${priceCell}</td>
         <td style="text-align:left;font-weight:bold;">${(item.sale_price * item.quantity).toFixed(2)}</td>
@@ -1677,7 +1685,10 @@ export default function POS() {
                     onClick={() => {
                       const sendWhatsApp = (invId: string, customerPhone: string, orderDetails: any) => {
                         if (!customerPhone.trim()) return;
-                        let itemsText = orderDetails.cart.map((item: any) => `• ${item.name} (${formatQty(item.quantity, item.unit)}) - ${(item.sale_price * item.quantity).toFixed(2)} ${storeSettings.currency}`).join('\n');
+                        let itemsText = orderDetails.cart.map((item: any) => {
+                          const tech = item.salesperson_name ? ` — الفني: ${item.salesperson_name}` : '';
+                          return `• ${item.name} (${formatQty(item.quantity, item.unit)}) - ${(item.sale_price * item.quantity).toFixed(2)} ${storeSettings.currency}${tech}`;
+                        }).join('\n');
                         const publicBaseUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
                           ? 'https://cashier-branch3.vercel.app'
                           : window.location.origin;
