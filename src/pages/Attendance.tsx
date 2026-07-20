@@ -24,6 +24,7 @@ const ERROR_AR: Record<string, string> = {
   not_checked_in: 'لم تسجّل حضور اليوم بعد',
   already_checked_in: 'لقد سجّلت حضورك اليوم بالفعل',
   already_checked_out: 'لقد سجّلت انصرافك اليوم بالفعل',
+  shift_still_open: 'لسه ما سجّلتش انصراف الوردية اللي فاتت — سجّل انصراف الأول',
   bad_action: 'إجراء غير معروف',
 };
 
@@ -32,7 +33,8 @@ export default function Attendance() {
   const [employees, setEmployees] = useState<AttEmployee[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [pin, setPin] = useState('');
-  const [status, setStatus] = useState<{ check_in: string | null; check_out: string | null }>({ check_in: null, check_out: null });
+  // work_date بيقول الوردية دي بتاعة أنهي يوم — لو امبارح يبقى وردية ليلية لسه مفتوحة
+  const [status, setStatus] = useState<{ check_in: string | null; check_out: string | null; work_date?: string | null }>({ check_in: null, check_out: null });
   const [busy, setBusy] = useState<'check_in' | 'check_out' | null>(null);
   const [toast, setToast] = useState<Toast>(null);
   const [now, setNow] = useState(new Date());
@@ -91,9 +93,9 @@ export default function Attendance() {
 
   // حالة اليوم للموظف المختار (لتفعيل زر الانصراف)
   const refreshStatus = useCallback(async (id: string) => {
-    if (!id) { setStatus({ check_in: null, check_out: null }); return; }
+    if (!id) { setStatus({ check_in: null, check_out: null, work_date: null }); return; }
     const { data } = await supabase.rpc('get_attendance_status', { p_employee_id: id });
-    if (data) setStatus({ check_in: (data as any).check_in, check_out: (data as any).check_out });
+    if (data) setStatus({ check_in: (data as any).check_in, check_out: (data as any).check_out, work_date: (data as any).work_date ?? null });
   }, []);
 
   useEffect(() => { refreshStatus(selectedId); }, [selectedId, refreshStatus]);
@@ -159,6 +161,12 @@ export default function Attendance() {
   const tc = branding.themeColor;
   const checkedIn = !!status.check_in;
   const checkedOut = !!status.check_out;
+  // الوردية المفتوحة بتاعة يوم فات = وردية عدّت نص الليل
+  const todayKey = (() => {
+    const d = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+    return d; // YYYY-MM-DD
+  })();
+  const isOvernightShift = !!status.work_date && status.work_date < todayKey;
   const fmtTime = (v: string | null) =>
     v ? new Date(v).toLocaleTimeString('ar-EG', { timeZone: 'Africa/Cairo', hour: '2-digit', minute: '2-digit' }) : '—';
 
@@ -273,6 +281,12 @@ export default function Attendance() {
             </div>
             {selectedId && !checkedIn && (
               <p className="text-center text-[11px] font-bold text-slate-400">زر الانصراف يُفعّل بعد تسجيل الحضور</p>
+            )}
+            {/* وردية بدأت امبارح وعدّت نص الليل — بنوضّح إن الانصراف هيتسجّل على يومها */}
+            {selectedId && checkedIn && !checkedOut && isOvernightShift && (
+              <p className="text-center text-[11px] font-bold text-amber-600 bg-amber-50 border border-amber-100 rounded-xl py-2">
+                وردية أمس ({status.work_date}) لسه مفتوحة — انصرافك هيتسجّل عليها
+              </p>
             )}
           </div>
 
