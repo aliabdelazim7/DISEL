@@ -1433,3 +1433,17 @@ where oi.order_id = o.id
   and o.salesperson_id is not null
   and jsonb_array_length(coalesce(o.salespeople, '[]'::jsonb)) = 0
   and exists (select 1 from employees e where e.id = o.salesperson_id);
+
+
+-- ========================= 33_category_sort_order.sql =========================
+-- ============================================================================
+-- 33 — ترتيب التصنيفات
+-- ============================================================================
+-- التصنيفات كانت بتترتّب أبجدياً (.order('name'))، فترتيب المحل الطبيعي
+-- (الشعر ← الدقن ← البشرة ← ... ← العروض) ما كانش ينفع يتحكم فيه.
+-- العمود ده بيخلي الترتيب بإيد صاحب المحل، والأبجدي بيفضل بديل عند التساوي.
+-- ============================================================================
+
+alter table categories add column if not exists sort_order integer not null default 0;
+
+create index if not exists idx_categories_sort_order on categories(sort_order, name);

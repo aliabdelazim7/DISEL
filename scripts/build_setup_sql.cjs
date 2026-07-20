@@ -21,9 +21,12 @@ const OUT = path.join(__dirname, '..', 'SETUP_DIESEL.sql');
 //                          لما تعوز تبدأ من الصفر، مش جزء من إعداد قاعدة جديدة.
 //   secure_rls_migration → تشديد أمان اختياري، بيتشغّل لوحده بعد ما التطبيق يشتغل
 //   seed_products_catalog → منتجات جاهزة، اختيارية حسب المحل
+//   34_reset_and_seed_diesel_services → كتالوج خدمات الديزل + تصفير كامل،
+//                          نفس السبب: أداة بالإيد مش جزء من إعداد قاعدة جديدة.
 const EXCLUDE = new Set([
   '12_reset_data.sql',
   '32_reset_and_seed_barbershop.sql',
+  '34_reset_and_seed_diesel_services.sql',
   'secure_rls_migration.sql',
   'seed_products_catalog.sql',
 ]);

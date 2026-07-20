@@ -87,6 +87,7 @@ export interface ProductionOrder {
 export interface Category {
   id: string;
   name: string;
+  sort_order?: number; // ترتيب العرض في الكاشير والمخزون (الأصغر أول)
 }
 
 export interface OrderItem extends Product {
@@ -1067,7 +1068,7 @@ export const useStore = create<CashierStore>((set, get) => ({
       const [settingsRes, categoriesRes, productsRes, customersRes, ordersRes, counterRes, cashiersRes, employeesRes, employeeTransactionsRes, employeeLeavesRes, attendanceRes] =
         await Promise.all([
           supabase.from('store_settings').select('*').limit(1).maybeSingle(),
-          supabase.from('categories').select('*').order('name'),
+          supabase.from('categories').select('*').order('sort_order').order('name'),
           supabase.from('products').select('*').order('name'),
           supabase.from('customers').select('*').order('created_at', { ascending: false }),
           supabase

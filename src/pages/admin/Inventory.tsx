@@ -147,7 +147,10 @@ export default function Inventory() {
     const name = newCategoryName.trim();
     if (!name) return;
     const { supabase } = await import('../../lib/supabase');
-    const { data } = await supabase.from('categories').insert({ name }).select().single();
+    // التصنيف الجديد يتحط في الآخر. من غير ده بياخد sort_order = 0 فيقفز
+    // لأول القايمة قدام تصنيفات المحل الأساسية.
+    const nextOrder = categories.reduce((mx, c: any) => Math.max(mx, Number(c.sort_order) || 0), 0) + 1;
+    const { data } = await supabase.from('categories').insert({ name, sort_order: nextOrder }).select().single();
     if (data) {
       useStore.setState(s => ({ categories: [...s.categories, data as any] }));
       setNewCategoryName('');
