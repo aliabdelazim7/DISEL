@@ -1068,7 +1068,10 @@ export const useStore = create<CashierStore>((set, get) => ({
       const [settingsRes, categoriesRes, productsRes, customersRes, ordersRes, counterRes, cashiersRes, employeesRes, employeeTransactionsRes, employeeLeavesRes, attendanceRes] =
         await Promise.all([
           supabase.from('store_settings').select('*').limit(1).maybeSingle(),
-          supabase.from('categories').select('*').order('sort_order').order('name'),
+          // الترتيب بيتعمل في الكود مش في الكويري: لو عمود sort_order لسه
+          // ما اتضافش (db/33 ما اشتغلش)، الترتيب في الكويري بيرمي خطأ
+          // والتصنيفات ما بتحمّلش خالص. كده بتشتغل بالاسم لحد ما الميجريشن تتشغّل.
+          supabase.from('categories').select('*'),
           supabase.from('products').select('*').order('name'),
           supabase.from('customers').select('*').order('created_at', { ascending: false }),
           supabase
@@ -1168,7 +1171,9 @@ export const useStore = create<CashierStore>((set, get) => ({
 
         set({
         storeSettings: settings,
-        categories: (categoriesRes.data ?? []) as Category[],
+        categories: ((categoriesRes.data ?? []) as Category[])
+          .slice()
+          .sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0) || a.name.localeCompare(b.name, 'ar')),
         products: (productsRes.data ?? []).map((p: any) => ({
           ...p,
           unit: p.unit ?? 'قطعة',
